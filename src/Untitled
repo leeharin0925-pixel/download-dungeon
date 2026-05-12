@@ -1,0 +1,499 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FileTypeIcon, MonsterBat, MonsterMimic, MonsterSlime } from './rpgIcons'
+import { fileItemKind } from './rpgFileKinds'
+import calicoCat from './assets/calico_cat.png'
+import greyCat from './assets/grey_cat.png'
+import shihTzu from './assets/shih_tzu.png'
+import './App.css'
+
+const SAVE_KEY = 'download-dungeon-save-v1'
+
+type DungeonScanRow = {
+  name: string
+  isDirectory: boolean
+  ext: string
+  size: number
+  mtimeMs: number
+}
+
+type DungeonScanResult = {
+  root: string
+  items: DungeonScanRow[]
+}
+
+type DungeonAnalyzeResult = {
+  root: string
+  duplicateGroups: {
+    name: string
+    size: number
+    count: number
+    files: string[]
+  }[]
+  recommendations: {
+    name: string
+    size: number
+    atimeMs: number
+    score: number
+    reasons: string[]
+  }[]
+  scannedFileCount: number
+}
+
+type Persisted = {
+  totalXp: number
+  scans: number
+  organizes: number
+}
+
+function loadPersisted(): Persisted {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY)
+    if (!raw) return { totalXp: 0, scans: 0, organizes: 0 }
+    const p = JSON.parse(raw) as Partial<Persisted>
+    return {
+      totalXp: typeof p.totalXp === 'number' ? p.totalXp : 0,
+      scans: typeof p.scans === 'number' ? p.scans : 0,
+      organizes: typeof p.organizes === 'number' ? p.organizes : 0,
+    }
+  } catch {
+    return { totalXp: 0, scans: 0, organizes: 0 }
+  }
+}
+
+function xpToNext(level: number): number {
+  return Math.max(40, Math.floor(45 + level * 28))
+}
+
+function levelProgress(totalXp: number): { level: number; into: number; need: number } {
+  let level = 1
+  let into = totalXp
+  for (;;) {
+    const need = xpToNext(level)
+    if (into < need) return { level, into, need }
+    into -= need
+    level++
+  }
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const u = ['KB', 'MB', 'GB', 'TB']
+  let v = n / 1024
+  let i = 0
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
+}
+
+function formatDate(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '정보 없음'
+  return new Date(ms).toLocaleDateString('ko-KR')
+}
+
+function App() {
+  const api = typeof window !== 'undefined' ? window.dungeon : undefined
+
+  const [persist, setPersist] = useState<Persisted>(() => loadPersisted())
+  const [log, setLog] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [scanResult, setScanResult] = useState<DungeonScanResult | null>(null)
+  const [analyzeResult, setAnalyzeResult] = useState<DungeonAnalyzeResult | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [levelUp, setLevelUp] = useState<number | null>(null)
+
+  // 체크박스 선택 상태
+  const [checkedRecs, setCheckedRecs] = useState<Set<string>>(new Set())
+  // 삭제 확인 팝업
+  const [confirmOpen, setConfirmOpen] = useState(false)
+
+  const prevXpRef = useRef(persist.totalXp)
+
+  useEffect(() => {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(persist))
+  }, [persist])
+
+  const prog = useMemo(() => levelProgress(persist.totalXp), [persist.totalXp])
+
+  useEffect(() => {
+    const before = levelProgress(prevXpRef.current).level
+    const after = levelProgress(persist.totalXp).level
+    if (after > before) setLevelUp(after)
+    prevXpRef.current = persist.totalXp
+  }, [persist.totalXp])
+
+  useEffect(() => {
+    if (levelUp === null) return
+    const t = window.setTimeout(() => setLevelUp(null), 3200)
+    return () => window.clearTimeout(t)
+  }, [levelUp])
+
+  const pushLog = useCallback((line: string) => {
+    setLog(prev => [line, ...prev].slice(0, 12))
+  }, [])
+
+  const fileRows = useMemo(() => {
+    if (!scanResult) return []
+    return scanResult.items.filter((i: DungeonScanRow) => !i.isDirectory)
+  }, [scanResult])
+
+  const dirCount = useMemo(() => {
+    if (!scanResult) return 0
+    return scanResult.items.filter((i: DungeonScanRow) => i.isDirectory).length
+  }, [scanResult])
+
+  const handleScan = async () => {
+    if (!api) { setErr('Electron 앱으로 실행하면 다운로드 폴더를 탐색할 수 있어요.'); return }
+    setErr(null); setBusy(true)
+    try {
+      const res = await api.scanDownloads()
+      setScanResult(res)
+      const files = res.items.filter((i: DungeonScanRow) => !i.isDirectory)
+      const scanXp = Math.min(24, 3 + files.length)
+      setPersist(p => ({ ...p, totalXp: p.totalXp + scanXp, scans: p.scans + 1 }))
+      pushLog(`탐색 완료 · 루트 파일 ${files.length}개 · +${scanXp} XP`)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '스캔에 실패했어요.')
+    } finally { setBusy(false) }
+  }
+
+  const handleOrganize = async () => {
+    if (!api) { setErr('Electron에서만 정리 마법을 쓸 수 있어요.'); return }
+    setErr(null); setBusy(true)
+    try {
+      const res = await api.organizeDownloads()
+      let xp = res.moved * 18
+      if (res.moved > 0) xp += 10
+      else if (res.failed.length > 0) xp += 4
+      setPersist(p => ({ ...p, totalXp: p.totalXp + xp, organizes: p.organizes + 1 }))
+      if (res.moved > 0) pushLog(`정리 성공 · ${res.moved}개 이동 · +${xp} XP`)
+      else pushLog(`이동할 루트 파일이 없어요. (${res.failed.length ? '일부 실패' : ''})`)
+      if (res.failed.length) pushLog(`잠금/권한으로 실패: ${res.failed.slice(0, 5).join(', ')}${res.failed.length > 5 ? '…' : ''}`)
+      const refreshed = await api.scanDownloads()
+      setScanResult(refreshed)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '정리에 실패했어요.')
+    } finally { setBusy(false) }
+  }
+
+  const handleAnalyze = async () => {
+    if (!api) { setErr('Electron에서만 중복/추천 분석을 실행할 수 있어요.'); return }
+    setErr(null); setBusy(true)
+    setCheckedRecs(new Set())
+    try {
+      const res = await api.analyzeDownloads()
+      setAnalyzeResult(res)
+      const gain = Math.min(44, 8 + res.duplicateGroups.length * 4 + res.recommendations.length)
+      setPersist(p => ({ ...p, totalXp: p.totalXp + gain }))
+      pushLog(`탐지 완료 · 중복 ${res.duplicateGroups.length}무리 · 추천 ${res.recommendations.length}개 · +${gain} XP`)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '분석에 실패했어요.')
+    } finally { setBusy(false) }
+  }
+
+  const toggleRec = (name: string) => {
+    setCheckedRecs(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const toggleAllRecs = () => {
+    if (!analyzeResult) return
+    const all = analyzeResult.recommendations.map(r => r.name)
+    if (checkedRecs.size === all.length) setCheckedRecs(new Set())
+    else setCheckedRecs(new Set(all))
+  }
+
+  const handleDeleteSelected = async () => {
+    if (!api || checkedRecs.size === 0) return
+    setConfirmOpen(false)
+    setBusy(true)
+    setErr(null)
+    try {
+      const res = await api.deleteFiles([...checkedRecs])
+      const xp = res.deleted * 20
+      setPersist(p => ({ ...p, totalXp: p.totalXp + xp }))
+      pushLog(`처치 완료 · ${res.deleted}개 삭제 · +${xp} XP`)
+      if (res.failed.length) pushLog(`삭제 실패: ${res.failed.slice(0, 3).join(', ')}`)
+      setCheckedRecs(new Set())
+      // 분석 결과 갱신
+      const refreshed = await api.analyzeDownloads()
+      setAnalyzeResult(refreshed)
+      const refreshedScan = await api.scanDownloads()
+      setScanResult(refreshedScan)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '삭제에 실패했어요.')
+    } finally { setBusy(false) }
+  }
+
+  const electronOnly = !api
+  const barPct = Math.min(100, (prog.into / prog.need) * 100)
+
+  return (
+    <div className="dungeon dungeon--rpg">
+      {/* 삭제 확인 팝업 */}
+      {confirmOpen && (
+        <div className="dungeon__confirmOverlay" role="dialog" aria-modal="true">
+          <div className="dungeon__confirmBox">
+            <p className="dungeon__confirmTitle">⚔️ 선택 파일을 처치할까요?</p>
+            <p className="dungeon__confirmSub">
+              {checkedRecs.size}개 파일이 영구 삭제됩니다. 복구할 수 없어요!
+            </p>
+            <ul className="dungeon__confirmList">
+              {[...checkedRecs].slice(0, 5).map(name => (
+                <li key={name}>{name}</li>
+              ))}
+              {checkedRecs.size > 5 && <li>외 {checkedRecs.size - 5}개...</li>}
+            </ul>
+            <div className="dungeon__confirmBtns">
+              <button type="button" className="dungeon__btn primary" onClick={handleDeleteSelected}>
+                처치 확인
+              </button>
+              <button type="button" className="dungeon__btn" onClick={() => setConfirmOpen(false)}>
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {levelUp !== null && (
+        <div className="levelUpOverlay" role="dialog" aria-modal="true" aria-label="레벨 업">
+          <div className="levelUpOverlay__flash" aria-hidden />
+          <div className="levelUpCard">
+            <p className="levelUpCard__pre">던전 정복도 상승</p>
+            <p className="levelUpCard__title pixelFont-large">LEVEL UP!</p>
+            <p className="levelUpCard__lv pixelFont-medium">LV {levelUp}</p>
+            <div className="levelUpCard__gems" aria-hidden><span /><span /><span /></div>
+          </div>
+        </div>
+      )}
+
+      <div className="dungeon__vignette" aria-hidden />
+
+      <header className="dungeon__hero">
+        <div className="dungeon__heroCharacters" aria-label="캐릭터 파티">
+          <figure className="dungeon__heroCharacter"><img src={greyCat} alt="회색 고양이 캐릭터" /></figure>
+          <figure className="dungeon__heroCharacter"><img src={calicoCat} alt="삼색 고양이 캐릭터" /></figure>
+          <figure className="dungeon__heroCharacter"><img src={shihTzu} alt="시추 캐릭터" /></figure>
+        </div>
+        <p className="dungeon__badge pixelFont-pill">offline · local only</p>
+        <h1 className="dungeon__title pixelFont">Download Dungeon RPG</h1>
+        <p className="dungeon__subtitle">
+          아무렇게나 쌓여가는 다운로드 던전, 아이템(파일)을 정리하면 경험치가 쌓입니다. 모든 이름·경로는 이 창 안에서만 처리됩니다. 외부로 절대 나가지 않아요.
+        </p>
+      </header>
+
+      {electronOnly && (
+        <aside className="dungeon__warn" role="status">
+          <MonsterMimic className="dungeon__warnIcon" />
+          <span className="dungeon__warnText">
+            개발 서버만 켠 상태라면 <code>npm run dev</code>로 Electron 창을 띄워 주세요.
+          </span>
+        </aside>
+      )}
+
+      <section className="dungeon__frame dungeon__status" aria-label="캐릭터 상태">
+        <div className="dungeon__frameInner">
+          <div className="dungeon__levelRow">
+            <span className="dungeon__lv pixelFont-medium">LV {prog.level}</span>
+            <span className={`dungeon__xpnums ${prog.into >= prog.need * 0.92 ? 'dungeon__xpnums--pulse' : ''}`}>
+              <span className="dungeon__xpLabel">EXP</span>{' '}
+              <span className="dungeon__xpfrac">{prog.into}/{prog.need}</span>
+            </span>
+          </div>
+          <div className="dungeon__bar" role="progressbar" aria-valuemin={0} aria-valuemax={prog.need} aria-valuenow={prog.into}>
+            <div className="dungeon__barBack" aria-hidden />
+            <div className="dungeon__barChunks" aria-hidden>
+              {Array.from({ length: 18 }, (_, i) => (
+                <span key={i} className={`dungeon__barChunk ${barPct > (i / 18) * 100 ? 'on' : ''}`} />
+              ))}
+            </div>
+          </div>
+          <p className="dungeon__stats">
+            <span className="dungeon__pill">전체 경험치<strong>{persist.totalXp}</strong></span>
+            <span className="dungeon__pill">탐색<strong>{persist.scans}</strong></span>
+            <span className="dungeon__pill">정복<strong>{persist.organizes}</strong></span>
+          </p>
+        </div>
+      </section>
+
+      <section className="dungeon__actions" aria-label="행동">
+        <button type="button" className="dungeon__btn primary" disabled={busy} onClick={handleScan}>
+          <MonsterBat className="dungeon__btnIcon" />
+          <span className="dungeon__btnText" style={{ color: '#f4fff4', WebkitTextFillColor: '#f4fff4', opacity: 1, fontFamily: 'Malgun Gothic, sans-serif' }}>
+            다운로드 던전 탐색{busy ? ' (처리 중)' : ''}
+          </span>
+        </button>
+        <button type="button" className="dungeon__btn" disabled={busy} onClick={handleOrganize}>
+          <MonsterSlime className="dungeon__btnIcon" />
+          <span className="dungeon__btnText" style={{ color: '#fff7ff', WebkitTextFillColor: '#fff7ff', opacity: 1, fontFamily: 'Malgun Gothic, sans-serif' }}>
+            아이템 정리{busy ? ' (처리 중)' : ''}
+          </span>
+        </button>
+        <button type="button" className="dungeon__btn dungeon__btn--violet" disabled={busy} onClick={handleAnalyze}>
+          <MonsterMimic className="dungeon__btnIcon" />
+          <span className="dungeon__btnText" style={{ color: '#f1e9ff', WebkitTextFillColor: '#f1e9ff', opacity: 1, fontFamily: 'Malgun Gothic, sans-serif' }}>
+            중복/AI 추천 분석{busy ? ' (처리 중)' : ''}
+          </span>
+        </button>
+      </section>
+
+      {err && <p className="dungeon__err" role="alert">{err}</p>}
+
+      <section className="dungeon__frame dungeon__panel" aria-label="스캔 결과">
+        <div className="dungeon__frameInner">
+          <h2 className="dungeon__h2">맵 스캔 로그</h2>
+          {!scanResult && <p className="dungeon__muted">아직 던전을 밝히지 않았습니다.</p>}
+          {scanResult && (
+            <>
+              <p className="dungeon__path" title={scanResult.root}>
+                <span className="dungeon__pathLabel">거점</span>
+                <code>{scanResult.root}</code>
+              </p>
+              <p className="dungeon__summary">
+                발견한 전리품(파일) <strong>{fileRows.length}</strong> · 구역(폴더) <strong>{dirCount}</strong> · 보관함 <code>DungeonSorted</code>
+              </p>
+              <div className="dungeon__tableWrap">
+                <table className="dungeon__table">
+                  <thead>
+                    <tr>
+                      <th className="colIcon" aria-hidden> </th>
+                      <th>전리품</th>
+                      <th>표식</th>
+                      <th>무게</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scanResult.items.map((row: DungeonScanRow) => {
+                      const kind = fileItemKind(row.ext, row.isDirectory)
+                      return (
+                        <tr key={row.name}>
+                          <td className="colIcon"><FileTypeIcon kind={kind} className="dungeon__rowIcon" /></td>
+                          <td className="dungeon__cellName">{row.name}</td>
+                          <td><span className="dungeon__typeTag">{row.isDirectory ? '구역' : (row.ext || '???')}</span></td>
+                          <td>{row.isDirectory ? '—' : formatBytes(row.size)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+
+      <section className="dungeon__frame dungeon__panel dungeon__panel--log" aria-label="모험 일지">
+        <div className="dungeon__frameInner">
+          <h2 className="dungeon__h2">모험 일지</h2>
+          {log.length === 0
+            ? <p className="dungeon__muted">기록된 이야기가 없습니다.</p>
+            : (
+              <ul className="dungeon__log">
+                {log.map((line, i) => (
+                  <li key={`${i}-${line}`}>
+                    <span className="dungeon__logBullet" aria-hidden />
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            )}
+        </div>
+      </section>
+
+      <section className="dungeon__frame dungeon__panel dungeon__panel--insight" aria-label="중복 탐지 및 AI 추천">
+        <div className="dungeon__frameInner">
+          <h2 className="dungeon__h2">중복 탐지 · AI 추천(로컬)</h2>
+          {!analyzeResult && (
+            <p className="dungeon__muted">아직 분석 기록이 없습니다. `중복/AI 추천 분석`으로 탐지하세요.</p>
+          )}
+          {analyzeResult && (
+            <>
+              <p className="dungeon__summary">
+                스캔 파일 <strong>{analyzeResult.scannedFileCount}</strong>개 · 중복 무리 <strong>{analyzeResult.duplicateGroups.length}</strong>개 · 추천 <strong>{analyzeResult.recommendations.length}</strong>개
+              </p>
+              <div className="dungeon__insightGrid">
+                <div className="dungeon__insightCard">
+                  <h3 className="dungeon__h3">복제 몬스터(파일명+용량)</h3>
+                  {analyzeResult.duplicateGroups.length === 0
+                    ? <p className="dungeon__muted">중복이 보이지 않습니다.</p>
+                    : (
+                      <ul className="dungeon__threatList">
+                        {analyzeResult.duplicateGroups.slice(0, 8).map(group => (
+                          <li key={`${group.name}-${group.size}`}>
+                            <span className="dungeon__threatTitle">{group.name}</span>
+                            <span className="dungeon__threatMeta">{group.count}회 · {formatBytes(group.size)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                </div>
+
+                <div className="dungeon__insightCard">
+                  <h3 className="dungeon__h3">AI 휴리스틱 추천(외부 API 없음)</h3>
+                  {analyzeResult.recommendations.length === 0
+                    ? <p className="dungeon__muted">지금은 추천 대상이 없습니다.</p>
+                    : (
+                      <>
+                        <div className="dungeon__recHeader">
+                          <label className="dungeon__checkAll">
+                            <input
+                              type="checkbox"
+                              checked={checkedRecs.size === analyzeResult.recommendations.length}
+                              onChange={toggleAllRecs}
+                            />
+                            전체 선택
+                          </label>
+                          {checkedRecs.size > 0 && (
+                            <button
+                              type="button"
+                              className="dungeon__btn dungeon__btn--danger dungeon__btn--sm"
+                              onClick={() => setConfirmOpen(true)}
+                              disabled={busy}
+                            >
+                              ⚔️ 선택 {checkedRecs.size}개 처치
+                            </button>
+                          )}
+                        </div>
+                        <ul className="dungeon__threatList">
+                          {analyzeResult.recommendations.slice(0, 10).map(item => (
+                            <li key={`${item.name}-${item.atimeMs}`} className={checkedRecs.has(item.name) ? 'dungeon__threatItem--checked' : ''}>
+                              <label className="dungeon__threatCheck">
+                                <input
+                                  type="checkbox"
+                                  checked={checkedRecs.has(item.name)}
+                                  onChange={() => toggleRec(item.name)}
+                                />
+                                <span className="dungeon__threatTitle">
+                                  {item.name}{' '}
+                                  <span className="dungeon__scoreBadge">위험도 {item.score}</span>
+                                </span>
+                              </label>
+                              <span className="dungeon__threatMeta">
+                                {formatBytes(item.size)} · 마지막 접근 {formatDate(item.atimeMs)} · {item.reasons.join(', ')}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+
+      <footer className="dungeon__foot">
+        <p>
+          규칙: 다운로드<strong>폴더 맨 위</strong>의 파일만{' '}
+          <code>DungeonSorted/</code>분류 저장고로 이동합니다. 네트워크 호출 없음 · 파일 내용 미전송.
+        </p>
+      </footer>
+    </div>
+  )
+}
+
+export default App
