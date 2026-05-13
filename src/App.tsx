@@ -81,11 +81,6 @@ function formatBytes(n: number): string {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
 }
 
-function formatDate(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '정보 없음'
-  return new Date(ms).toLocaleDateString('ko-KR')
-}
-
 function idleDays(atimeMs: number): number {
   return Math.floor((Date.now() - atimeMs) / (24 * 60 * 60 * 1000))
 }
@@ -232,7 +227,6 @@ function App() {
   const handleDeleteSelected = async () => {
     if (!api || checkedRecs.size === 0) return
     setConfirmOpen(false); setBusy(true); setErr(null)
-    const deleteCount = checkedRecs.size
     try {
       const recMap = new Map(analyzeResult?.recommendations.map(r => [r.name, r]) ?? [])
       const totalBytes = [...checkedRecs].reduce((sum, name) => sum + (recMap.get(name)?.size ?? 0), 0)

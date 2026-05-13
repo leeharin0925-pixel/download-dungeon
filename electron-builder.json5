@@ -1,9 +1,8 @@
-// @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "YourAppID",
+  "appId": "com.leeharin.download-dungeon",
   "asar": true,
-  "productName": "YourAppName",
+  "productName": "Download Dungeon RPG",
   "directories": {
     "output": "release/${version}"
   },

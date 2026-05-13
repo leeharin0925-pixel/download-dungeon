@@ -1,7 +1,9 @@
 {
   "name": "download-dungeon",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "RPG style download folder cleaner",
+  "author": "leeharin0925-pixel",
   "type": "module",
   "scripts": {
     "dev": "vite",

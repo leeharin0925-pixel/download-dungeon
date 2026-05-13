@@ -1,207 +1,144 @@
-import { app, BrowserWindow, ipcMain } from "electron";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-import fs from "node:fs/promises";
-const __dirname$1 = path.dirname(fileURLToPath(import.meta.url));
-const SORT_ROOT_NAME = "DungeonSorted";
-function categoryForExt(ext) {
-  const e = ext.replace(/^\./, "").toLowerCase();
-  const images = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "heic", "avif"];
-  const documents = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "odt", "ods", "csv"];
-  const archives = ["zip", "rar", "7z", "tar", "gz", "bz2", "xz"];
-  const video = ["mp4", "mkv", "webm", "mov", "avi", "wmv", "m4v"];
-  const audio = ["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"];
-  const code = ["js", "ts", "tsx", "jsx", "py", "java", "cpp", "c", "h", "rs", "go", "html", "css", "json", "vue", "svelte"];
-  if (images.includes(e)) return "Images";
-  if (documents.includes(e)) return "Documents";
-  if (archives.includes(e)) return "Archives";
-  if (video.includes(e)) return "Video";
-  if (audio.includes(e)) return "Audio";
-  if (code.includes(e)) return "Code";
-  return "Other";
+import { app as p, BrowserWindow as v, ipcMain as f } from "electron";
+import { fileURLToPath as j } from "node:url";
+import r from "node:path";
+import d from "node:fs/promises";
+const M = r.dirname(j(import.meta.url)), g = "DungeonSorted";
+function P(n) {
+  const s = n.replace(/^\./, "").toLowerCase(), o = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "heic", "avif"], t = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "odt", "ods", "csv"], m = ["zip", "rar", "7z", "tar", "gz", "bz2", "xz"], i = ["mp4", "mkv", "webm", "mov", "avi", "wmv", "m4v"], a = ["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"], e = ["js", "ts", "tsx", "jsx", "py", "java", "cpp", "c", "h", "rs", "go", "html", "css", "json", "vue", "svelte"];
+  return o.includes(s) ? "Images" : t.includes(s) ? "Documents" : m.includes(s) ? "Archives" : i.includes(s) ? "Video" : a.includes(s) ? "Audio" : e.includes(s) ? "Code" : "Other";
 }
-async function uniqueDestPath(destPath) {
+async function D(n) {
   try {
-    await fs.access(destPath);
+    await d.access(n);
   } catch {
-    return destPath;
+    return n;
   }
-  const dir = path.dirname(destPath);
-  const base = path.basename(destPath);
-  const ext = path.extname(base);
-  const stem = ext ? base.slice(0, -ext.length) : base;
-  let n = 1;
+  const s = r.dirname(n), o = r.basename(n), t = r.extname(o), m = t ? o.slice(0, -t.length) : o;
+  let i = 1;
   for (; ; ) {
-    const candidate = path.join(dir, `${stem} (${n})${ext}`);
+    const a = r.join(s, `${m} (${i})${t}`);
     try {
-      await fs.access(candidate);
-      n++;
+      await d.access(a), i++;
     } catch {
-      return candidate;
+      return a;
     }
   }
 }
-function tempPatternMatched(name) {
-  const lowered = name.toLowerCase();
-  if (lowered.startsWith("~$")) return true;
-  return lowered.endsWith(".tmp") || lowered.endsWith(".temp") || lowered.endsWith(".part") || lowered.endsWith(".crdownload") || lowered.endsWith(".download") || lowered.endsWith(".bak");
+function _(n) {
+  const s = n.toLowerCase();
+  return s.startsWith("~$") ? !0 : s.endsWith(".tmp") || s.endsWith(".temp") || s.endsWith(".part") || s.endsWith(".crdownload") || s.endsWith(".download") || s.endsWith(".bak");
 }
-function recommendationScore(file, nowMs) {
-  const reasons = [];
-  let score = 0;
-  const dayMs = 24 * 60 * 60 * 1e3;
-  const idleDays = (nowMs - file.atimeMs) / dayMs;
-  if (idleDays >= 30) {
-    const staleBonus = Math.min(35, Math.floor((idleDays - 30) / 7) * 3);
-    score += 40 + staleBonus;
-    reasons.push(`${Math.floor(idleDays)}일 미접근`);
+function x(n, s) {
+  const o = [];
+  let t = 0;
+  const m = 24 * 60 * 60 * 1e3, i = (s - n.atimeMs) / m;
+  if (i >= 30) {
+    const a = Math.min(35, Math.floor((i - 30) / 7) * 3);
+    t += 40 + a, o.push(`${Math.floor(i)}일 미접근`);
   }
-  if (file.size >= 500 * 1024 * 1024) {
-    score += 36;
-    reasons.push("대용량(500MB+)");
-  } else if (file.size >= 100 * 1024 * 1024) {
-    score += 24;
-    reasons.push("중대용량(100MB+)");
-  } else if (file.size >= 25 * 1024 * 1024) {
-    score += 12;
-    reasons.push("용량 큼(25MB+)");
-  }
-  if (tempPatternMatched(file.name)) {
-    score += 45;
-    reasons.push("임시파일 패턴");
-  }
-  return { score, reasons };
+  return n.size >= 500 * 1024 * 1024 ? (t += 36, o.push("대용량(500MB+)")) : n.size >= 100 * 1024 * 1024 ? (t += 24, o.push("중대용량(100MB+)")) : n.size >= 25 * 1024 * 1024 && (t += 12, o.push("용량 큼(25MB+)")), _(n.name) && (t += 45, o.push("임시파일 패턴")), { score: t, reasons: o };
 }
-process.env.APP_ROOT = path.join(__dirname$1, "..");
-const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
-const MAIN_DIST = path.join(process.env.APP_ROOT, "dist-electron");
-const RENDERER_DIST = path.join(process.env.APP_ROOT, "dist");
-process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, "public") : RENDERER_DIST;
-let win;
-function createWindow() {
-  win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
+process.env.APP_ROOT = r.join(M, "..");
+const w = process.env.VITE_DEV_SERVER_URL, C = r.join(process.env.APP_ROOT, "dist-electron"), y = r.join(process.env.APP_ROOT, "dist");
+process.env.VITE_PUBLIC = w ? r.join(process.env.APP_ROOT, "public") : y;
+let u;
+function z() {
+  u = new v({
+    icon: r.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
     webPreferences: {
-      preload: path.join(__dirname$1, "preload.mjs")
+      preload: r.join(M, "preload.mjs")
     }
-  });
-  win.webContents.on("did-finish-load", () => {
-    win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
-  });
-  if (VITE_DEV_SERVER_URL) win.loadURL(VITE_DEV_SERVER_URL);
-  else win.loadFile(path.join(RENDERER_DIST, "index.html"));
+  }), u.webContents.on("did-finish-load", () => {
+    u == null || u.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+  }), w ? u.loadURL(w) : u.loadFile(r.join(y, "index.html"));
 }
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-    win = null;
-  }
+p.on("window-all-closed", () => {
+  process.platform !== "darwin" && (p.quit(), u = null);
 });
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+p.on("activate", () => {
+  v.getAllWindows().length === 0 && z();
 });
-function registerDungeonIpc() {
-  ipcMain.handle("dungeon:analyzeDownloads", async () => {
-    const root = app.getPath("downloads");
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    const files = [];
-    for (const dirent of entries) {
-      if (!dirent.isFile()) continue;
-      if (dirent.name.startsWith(".")) continue;
-      const fullPath = path.join(root, dirent.name);
-      const st = await fs.stat(fullPath);
-      files.push({ name: dirent.name, size: st.size, mtimeMs: st.mtimeMs, atimeMs: st.atimeMs });
+function R() {
+  f.handle("dungeon:analyzeDownloads", async () => {
+    const n = p.getPath("downloads"), s = await d.readdir(n, { withFileTypes: !0 }), o = [];
+    for (const e of s) {
+      if (!e.isFile() || e.name.startsWith(".")) continue;
+      const c = r.join(n, e.name), l = await d.stat(c);
+      o.push({ name: e.name, size: l.size, mtimeMs: l.mtimeMs, atimeMs: l.atimeMs });
     }
-    const duplicateMap = /* @__PURE__ */ new Map();
-    for (const file of files) {
-      const key = `${file.name.toLowerCase()}::${file.size}`;
-      const prev = duplicateMap.get(key);
-      if (prev) prev.push(file);
-      else duplicateMap.set(key, [file]);
+    const t = /* @__PURE__ */ new Map();
+    for (const e of o) {
+      const c = `${e.name.toLowerCase()}::${e.size}`, l = t.get(c);
+      l ? l.push(e) : t.set(c, [e]);
     }
-    const duplicateGroups = Array.from(duplicateMap.values()).filter((group) => group.length > 1).map((group) => ({ name: group[0].name, size: group[0].size, count: group.length, files: group.map((x) => x.name) })).sort((a, b) => b.count - a.count || b.size - a.size || a.name.localeCompare(b.name));
-    const nowMs = Date.now();
-    const recommendations = files.map((file) => {
-      const s = recommendationScore(file, nowMs);
-      return { name: file.name, size: file.size, atimeMs: file.atimeMs, score: s.score, reasons: s.reasons };
-    }).filter((x) => x.score >= 35).sort((a, b) => b.score - a.score || b.size - a.size || a.name.localeCompare(b.name)).slice(0, 20);
-    return { root, duplicateGroups, recommendations, scannedFileCount: files.length };
-  });
-  ipcMain.handle("dungeon:scanDownloads", async () => {
-    const root = app.getPath("downloads");
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    const items = [];
-    for (const dirent of entries) {
-      const fullPath = path.join(root, dirent.name);
-      if (dirent.isDirectory()) {
-        if (dirent.name === SORT_ROOT_NAME) continue;
-        const st2 = await fs.stat(fullPath);
-        items.push({ name: dirent.name, isDirectory: true, ext: "", size: 0, mtimeMs: st2.mtimeMs });
+    const m = Array.from(t.values()).filter((e) => e.length > 1).map((e) => ({ name: e[0].name, size: e[0].size, count: e.length, files: e.map((c) => c.name) })).sort((e, c) => c.count - e.count || c.size - e.size || e.name.localeCompare(c.name)), i = Date.now(), a = o.map((e) => {
+      const c = x(e, i);
+      return { name: e.name, size: e.size, atimeMs: e.atimeMs, score: c.score, reasons: c.reasons };
+    }).filter((e) => e.score >= 35).sort((e, c) => c.score - e.score || c.size - e.size || e.name.localeCompare(c.name)).slice(0, 20);
+    return { root: n, duplicateGroups: m, recommendations: a, scannedFileCount: o.length };
+  }), f.handle("dungeon:scanDownloads", async () => {
+    const n = p.getPath("downloads"), s = await d.readdir(n, { withFileTypes: !0 }), o = [];
+    for (const t of s) {
+      const m = r.join(n, t.name);
+      if (t.isDirectory()) {
+        if (t.name === g) continue;
+        const a = await d.stat(m);
+        o.push({ name: t.name, isDirectory: !0, ext: "", size: 0, mtimeMs: a.mtimeMs });
         continue;
       }
-      if (!dirent.isFile()) continue;
-      const st = await fs.stat(fullPath);
-      items.push({ name: dirent.name, isDirectory: false, ext: path.extname(dirent.name), size: st.size, mtimeMs: st.mtimeMs });
+      if (!t.isFile()) continue;
+      const i = await d.stat(m);
+      o.push({ name: t.name, isDirectory: !1, ext: r.extname(t.name), size: i.size, mtimeMs: i.mtimeMs });
     }
-    return { root, items };
-  });
-  ipcMain.handle("dungeon:organizeDownloads", async () => {
-    const root = app.getPath("downloads");
-    const sortedBase = path.join(root, SORT_ROOT_NAME);
-    await fs.mkdir(sortedBase, { recursive: true });
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    let moved = 0;
-    const moves = [];
-    const failed = [];
-    for (const dirent of entries) {
-      if (!dirent.isFile()) continue;
-      if (dirent.name.startsWith(".")) continue;
-      const category = categoryForExt(path.extname(dirent.name));
-      const destDir = path.join(sortedBase, category);
-      await fs.mkdir(destDir, { recursive: true });
-      const srcPath = path.join(root, dirent.name);
-      let destPath = path.join(destDir, dirent.name);
-      destPath = await uniqueDestPath(destPath);
+    return { root: n, items: o };
+  }), f.handle("dungeon:organizeDownloads", async () => {
+    const n = p.getPath("downloads"), s = r.join(n, g);
+    await d.mkdir(s, { recursive: !0 });
+    const o = await d.readdir(n, { withFileTypes: !0 });
+    let t = 0;
+    const m = [], i = [];
+    for (const a of o) {
+      if (!a.isFile() || a.name.startsWith(".")) continue;
+      const e = P(r.extname(a.name)), c = r.join(s, e);
+      await d.mkdir(c, { recursive: !0 });
+      const l = r.join(n, a.name);
+      let h = r.join(c, a.name);
+      h = await D(h);
       try {
-        await fs.rename(srcPath, destPath);
-        moved++;
-        moves.push(dirent.name);
+        await d.rename(l, h), t++, m.push(a.name);
       } catch {
-        failed.push(dirent.name);
+        i.push(a.name);
       }
     }
-    return { moved, moves, failed };
-  });
-  ipcMain.handle("dungeon:deleteFiles", async (_event, fileNames) => {
-    const root = app.getPath("downloads");
-    let deleted = 0;
-    const failed = [];
-    for (const name of fileNames) {
-      if (name.includes("/") || name.includes("\\") || name.includes("..")) {
-        failed.push(name);
+    return { moved: t, moves: m, failed: i };
+  }), f.handle("dungeon:deleteFiles", async (n, s) => {
+    const o = p.getPath("downloads");
+    let t = 0;
+    const m = [];
+    for (const i of s) {
+      if (i.includes("/") || i.includes("\\") || i.includes("..")) {
+        m.push(i);
         continue;
       }
-      const fullPath = path.join(root, name);
-      if (!fullPath.startsWith(root)) {
-        failed.push(name);
+      const a = r.join(o, i);
+      if (!a.startsWith(o)) {
+        m.push(i);
         continue;
       }
       try {
-        await fs.unlink(fullPath);
-        deleted++;
+        await d.unlink(a), t++;
       } catch {
-        failed.push(name);
+        m.push(i);
       }
     }
-    return { deleted, failed };
+    return { deleted: t, failed: m };
   });
 }
-app.whenReady().then(() => {
-  registerDungeonIpc();
-  createWindow();
+p.whenReady().then(() => {
+  R(), z();
 });
 export {
-  MAIN_DIST,
-  RENDERER_DIST,
-  VITE_DEV_SERVER_URL
+  C as MAIN_DIST,
+  y as RENDERER_DIST,
+  w as VITE_DEV_SERVER_URL
 };
